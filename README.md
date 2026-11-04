@@ -10,7 +10,8 @@ service.
 
 - `backend/` — Python 3.13, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic,
   LangGraph, LangChain, and Ollama integration.
-- `frontend/` — React and TypeScript.
+- `frontend/` — React 19, TypeScript, Vite, Tailwind CSS, Axios, and React
+  Router.
 - `docs/` — architecture, engineering notes, and interview preparation.
 - PostgreSQL 17 — persistent interviews, questions, criteria, answers, and
   evaluations.
@@ -24,6 +25,7 @@ answer and records `FAILED`.
 
 - Windows PowerShell (commands below use PowerShell syntax).
 - Python 3.13.
+- Node.js and npm (for the Vite frontend).
 - PostgreSQL 17, either an existing local instance or Docker.
 - Ollama with `qwen2.5:3b` downloaded for live AI evaluation.
 
@@ -79,11 +81,15 @@ ollama pull qwen2.5:3b
 ollama serve
 ```
 
-Start the API from `backend/`:
+Start the API from the repository root with the development script. The
+`-StopExisting` switch stops only confirmed InterviewOS listeners on port 8000,
+including an orphaned reload worker verified by its parent PID and the
+InterviewOS health response. It refuses to stop unverified processes. The
+script runs one foreground Uvicorn process with application DEBUG diagnostics
+and HTTP access logging; press `Ctrl+C` in that terminal to stop it cleanly:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+.\backend\scripts\start-dev.ps1 -StopExisting
 ```
 
 - Health: <http://localhost:8000/api/health>
@@ -92,6 +98,21 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 The app reads `DATABASE_URL`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`,
 `OLLAMA_TIMEOUT_SECONDS`, and `CORS_ORIGINS` from the environment or
 `backend/.env`.
+
+### 5. Start the frontend
+
+In another PowerShell window, from the repository root:
+
+```powershell
+Set-Location .\frontend
+Copy-Item .env.example .env.local
+npm ci
+npm run dev
+```
+
+Vite serves the frontend at <http://localhost:5173>. The example
+`VITE_API_BASE_URL` points to the local backend at `http://localhost:8000`;
+change it in `frontend/.env.local` if the backend uses another URL.
 
 ## Docker Compose
 
@@ -263,11 +284,20 @@ From `backend/`:
 ```powershell
 python -m compileall -q app tests
 python -m pytest -q
-alembic upgrade head
 ```
 
 Tests use an isolated SQLite database and mocked LangGraph model calls. They do
 not require PostgreSQL, Ollama, or network access.
+
+From `frontend/`:
+
+```powershell
+npm ci
+npm run build
+npm run lint
+```
+
+There is currently no frontend test script.
 
 ## Evaluation limitations
 

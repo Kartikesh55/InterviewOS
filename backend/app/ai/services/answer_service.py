@@ -53,22 +53,49 @@ def validate_criterion_assessments(
             by_criterion.setdefault(normalized, []).append(assessment)
 
     validated = []
-    for criterion in evaluation_criteria:
+    for index, criterion in enumerate(evaluation_criteria, start=1):
         matches = by_criterion.get(normalize_criterion(criterion), [])
-        if len(matches) != 1 or matches[0].status == "MISSING":
-            validated.append(CriterionAssessment(criterion=criterion, status="MISSING"))
-            continue
-        evidence = find_verbatim_evidence(candidate_answer, matches[0].evidence)
-        if evidence is None:
-            validated.append(CriterionAssessment(criterion=criterion, status="MISSING"))
-            continue
-        validated.append(
-            CriterionAssessment(
-                criterion=criterion,
-                status=matches[0].status,
-                evidence=evidence,
-            )
+        matched_exactly_once = len(matches) == 1
+        raw_status = matches[0].status if matched_exactly_once else None
+        evidence = (
+            find_verbatim_evidence(candidate_answer, matches[0].evidence)
+            if matched_exactly_once
+            else None
         )
+        evidence_valid = evidence is not None
+
+        if not matched_exactly_once:
+            final = CriterionAssessment(criterion=criterion, status="MISSING")
+            reason = "draft_assessment_count_not_one"
+        elif raw_status == "MISSING":
+            final = CriterionAssessment(criterion=criterion, status="MISSING")
+            reason = "llm_marked_missing"
+        elif not evidence_valid:
+            final = CriterionAssessment(criterion=criterion, status="MISSING")
+            reason = "evidence_not_found_in_candidate_answer"
+        else:
+            final = CriterionAssessment(
+                criterion=criterion,
+                status=raw_status,
+                evidence=evidence or "",
+            )
+            reason = None
+
+        # Debug diagnostics intentionally omit criterion text, candidate answers,
+        # and evidence quotes; they distinguish model classification from quote
+        # validation without logging candidate content.
+        logger.debug(
+            "Criterion validation diagnostic: index=%d "
+            "matched_exactly_once=%s raw_status=%s evidence_valid=%s "
+            "final_status=%s reason=%s",
+            index,
+            matched_exactly_once,
+            raw_status or "UNAVAILABLE",
+            evidence_valid,
+            final.status,
+            reason or "none",
+        )
+        validated.append(final)
     return validated
 
 

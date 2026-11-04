@@ -4,7 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.ai.services import answer_service, question_service
-from app.schemas.evaluation import AnswerEvaluationDraft, AnswerEvaluationRequest
+from app.schemas.evaluation import (
+    AnswerEvaluationDraft,
+    AnswerEvaluationRequest,
+    CriterionAssessmentDraft,
+)
 
 
 CRITERIA = ["Explain hashing", "Describe collisions", "Discuss complexity"]
@@ -220,6 +224,204 @@ def test_prompt_distinguishes_semantic_rationale_from_quote_validation(monkeypat
     assert result.evaluationStatus == "COMPLETED"
     assert "Do not treat keyword mentions or verbatim phrases alone as proof" in mock.prompt
     assert "rationale must explain the actual substance" in mock.prompt
+
+
+@pytest.mark.parametrize(
+    ("criteria", "answer", "evidence"),
+    [
+        (
+            [
+                "Load balancing",
+                "Horizontal and vertical scaling",
+                "Caching",
+                "Error handling and fallback strategies",
+                "Monitoring and alerting",
+            ],
+            (
+                "Load balancing distributes requests across application instances. "
+                "Horizontal scaling adds instances, while vertical scaling adds "
+                "resources to each instance. Caching avoids repeated database reads. "
+                "Retries, circuit breakers, and graceful degradation provide error "
+                "handling and fallback strategies. Monitoring and alerting track "
+                "latency, errors, and saturation."
+            ),
+            [
+                "distributes requests across application instances",
+                "Horizontal scaling adds instances",
+                "Caching avoids repeated database reads",
+                "Retries, circuit breakers, and graceful degradation",
+                "Monitoring and alerting track latency, errors, and saturation",
+            ],
+        ),
+        (
+            [
+                "Argon2, bcrypt, or PBKDF2",
+                "Salting passwords",
+                "Key derivation functions",
+                "Secure storage and encryption",
+                "Secure password handling",
+            ],
+            (
+                "Argon2, bcrypt, and PBKDF2 are password hashing algorithms. "
+                "Salting passwords prevents identical passwords from sharing a "
+                "stored hash. These key derivation functions use configurable work "
+                "factors. Secure storage keeps password hashes in the database, "
+                "with encryption at rest protecting the storage. Secure password "
+                "handling avoids logging plaintext credentials and uses TLS in transit."
+            ),
+            [
+                "Argon2, bcrypt, and PBKDF2 are password hashing algorithms",
+                "Salting passwords prevents identical passwords from sharing a stored hash",
+                "key derivation functions use configurable work factors",
+                "encryption at rest protecting the storage",
+                "avoids logging plaintext credentials and uses TLS in transit",
+            ],
+        ),
+    ],
+    ids=["backend-scalability", "password-security"],
+)
+def test_representative_domain_answers_accept_valid_verbatim_evidence(
+    monkeypatch,
+    criteria,
+    answer,
+    evidence,
+):
+    result, _ = run_evaluation(
+        monkeypatch,
+        draft(
+            [
+                assessment(criterion, "COVERED", quote)
+                for criterion, quote in zip(criteria, evidence, strict=True)
+            ]
+        ),
+        answer,
+        criteria,
+    )
+
+    assert [item.criterion for item in result.criterionAssessments] == criteria
+    assert [item.status for item in result.criterionAssessments] == ["COVERED"] * 5
+    assert [item.evidence for item in result.criterionAssessments] == evidence
+    assert result.completeness == 10
+
+
+@pytest.mark.parametrize(
+    ("criteria", "answer", "evidence", "unmatched_quote"),
+    [
+        (
+            [
+                "Load balancing",
+                "Horizontal and vertical scaling",
+                "Caching",
+                "Error handling and fallback strategies",
+                "Monitoring and alerting",
+            ],
+            (
+                "Load balancing distributes requests across application instances. "
+                "Horizontal scaling adds instances, while vertical scaling adds "
+                "resources to each instance. Caching avoids repeated database reads. "
+                "Retries, circuit breakers, and graceful degradation provide error "
+                "handling and fallback strategies. Monitoring and alerting track "
+                "latency, errors, and saturation."
+            ),
+            [
+                "load balancing routes incoming traffic between service replicas",
+                "Horizontal scaling adds instances",
+                "Caching avoids repeated database reads",
+                "Retries, circuit breakers, and graceful degradation",
+                "Monitoring and alerting track latency, errors, and saturation",
+            ],
+            "load balancing routes incoming traffic between service replicas",
+        ),
+        (
+            [
+                "Argon2, bcrypt, or PBKDF2",
+                "Salting passwords",
+                "Key derivation functions",
+                "Secure storage and encryption",
+                "Secure password handling",
+            ],
+            (
+                "Argon2, bcrypt, and PBKDF2 are password hashing algorithms. "
+                "Salting passwords prevents identical passwords from sharing a "
+                "stored hash. These key derivation functions use configurable work "
+                "factors. Secure storage keeps password hashes in the database, "
+                "with encryption at rest protecting the storage. Secure password "
+                "handling avoids logging plaintext credentials and uses TLS in transit."
+            ),
+            [
+                "the salt makes equal passwords produce different stored digests",
+                "Salting passwords prevents identical passwords from sharing a stored hash",
+                "key derivation functions use configurable work factors",
+                "encryption at rest protecting the storage",
+                "avoids logging plaintext credentials and uses TLS in transit",
+            ],
+            "the salt makes equal passwords produce different stored digests",
+        ),
+    ],
+    ids=["backend-scalability", "password-security"],
+)
+def test_representative_answers_log_verbatim_evidence_downgrades_without_content(
+    monkeypatch,
+    caplog,
+    criteria,
+    answer,
+    evidence,
+    unmatched_quote,
+):
+    caplog.set_level("DEBUG", logger=answer_service.__name__)
+    result, _ = run_evaluation(
+        monkeypatch,
+        draft(
+            [
+                assessment(criterion, "COVERED", quote)
+                for criterion, quote in zip(criteria, evidence, strict=True)
+            ]
+        ),
+        answer,
+        criteria,
+    )
+
+    assert [item.status for item in result.criterionAssessments] == [
+        "MISSING",
+        "COVERED",
+        "COVERED",
+        "COVERED",
+        "COVERED",
+    ]
+    assert result.completeness == 8
+    assert "matched_exactly_once=True" in caplog.text
+    assert "raw_status=COVERED" in caplog.text
+    assert "evidence_valid=False" in caplog.text
+    assert "final_status=MISSING" in caplog.text
+    assert "reason=evidence_not_found_in_candidate_answer" in caplog.text
+    assert answer not in caplog.text
+    assert unmatched_quote not in caplog.text
+
+
+def test_diagnostics_distinguish_llm_missing_from_evidence_validation_failure(
+    caplog,
+):
+    caplog.set_level("DEBUG", logger=answer_service.__name__)
+    assessments = [
+        CriterionAssessmentDraft.model_validate(
+            assessment("LLM marked missing", "MISSING", "matching phrase")
+        ),
+        CriterionAssessmentDraft.model_validate(
+            assessment("Quote not found", "COVERED", "paraphrased quote")
+        ),
+    ]
+
+    result = answer_service.validate_criterion_assessments(
+        assessments,
+        ["LLM marked missing", "Quote not found"],
+        "A matching phrase appears here.",
+    )
+
+    assert [item.status for item in result] == ["MISSING", "MISSING"]
+    assert "raw_status=MISSING evidence_valid=True final_status=MISSING reason=llm_marked_missing" in caplog.text
+    assert "raw_status=COVERED evidence_valid=False final_status=MISSING reason=evidence_not_found_in_candidate_answer" in caplog.text
+    assert "A matching phrase appears here." not in caplog.text
+    assert "paraphrased quote" not in caplog.text
 
 
 def test_invalid_follow_up_is_discarded_without_losing_valid_evaluation(monkeypatch):

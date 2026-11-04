@@ -450,6 +450,7 @@ def test_duplicate_answers_and_final_slot_follow_up_are_handled(
 def test_report_aggregates_persisted_answer_without_new_evaluation(
     client,
     monkeypatch,
+    session_factory,
 ):
     from app.services import answer_service
 
@@ -463,10 +464,42 @@ def test_report_aggregates_persisted_answer_without_new_evaluation(
     )
     report = client.get(f"/api/interviews/{interview['id']}/report")
     assert report.status_code == 200
-    assert report.json()["questions"][0]["answers"][0]["evaluationStatus"] == "COMPLETED"
-    assert [
-        item["criterion"]
-        for item in report.json()["questions"][0]["answers"][0]["criterionAssessments"]
-    ] == ["Concept 1", "Trade-off 1"]
+    saved_answer = report.json()["questions"][0]["answers"][0]
+    assert saved_answer["evaluationStatus"] == "COMPLETED"
+    assert saved_answer["technicalAccuracy"] == 8
+    assert saved_answer["completeness"] == 10
+    assert saved_answer["clarity"] == 8
+    assert saved_answer["depth"] == 7
+    assert saved_answer["overallScore"] == 8.45
+    assert saved_answer["criterionAssessments"] == [
+        {
+            "criterion": "Concept 1",
+            "status": "COVERED",
+            "evidence": "Concept 1 is supported.",
+        },
+        {
+            "criterion": "Trade-off 1",
+            "status": "COVERED",
+            "evidence": "Trade-off 1 is explained.",
+        },
+    ]
+    assert saved_answer["strengths"] == ["Concept 1", "Trade-off 1"]
+    assert saved_answer["missingConcepts"] == []
     assert len(graph.calls) == 1
     assert report.json()["createdAt"].endswith("Z")
+
+    with session_factory() as session:
+        persisted_answer = session.scalar(select(InterviewAnswer))
+        assert persisted_answer.evaluation_status == EvaluationStatus.COMPLETED
+        assert persisted_answer.technical_accuracy == 8
+        assert persisted_answer.completeness == 10
+        assert persisted_answer.clarity == 8
+        assert persisted_answer.depth == 7
+        assert persisted_answer.overall_score == 8.45
+        assert [
+            (item.criterion, item.status.value, item.evidence)
+            for item in persisted_answer.assessments
+        ] == [
+            ("Concept 1", "COVERED", "Concept 1 is supported."),
+            ("Trade-off 1", "COVERED", "Trade-off 1 is explained."),
+        ]

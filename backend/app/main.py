@@ -1,10 +1,27 @@
 import logging
+import os
+import sys
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, OperationalError
+
+application_logger = logging.getLogger("app")
+application_log_level_name = os.environ.get("INTERVIEWOS_LOG_LEVEL", "INFO").upper()
+application_log_level = getattr(logging, application_log_level_name, None)
+if not isinstance(application_log_level, int):
+    raise ValueError("INTERVIEWOS_LOG_LEVEL must be a valid logging level")
+
+application_logger.setLevel(application_log_level)
+if not application_logger.handlers:
+    application_handler = logging.StreamHandler(sys.stderr)
+    application_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    application_logger.addHandler(application_handler)
+application_logger.propagate = False
 
 from app.api.routes import ai, answers, health, interviews, questions
 from app.core.config import get_settings
