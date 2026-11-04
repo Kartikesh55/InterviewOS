@@ -2,6 +2,7 @@ from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
 
+from app.models import GeneratedQuestion
 from app.services.question_service import generate_questions
 
 
@@ -9,7 +10,7 @@ class QuestionState(TypedDict):
     target_role: str
     difficulty: str
     number_of_questions: int
-    questions: list[str]
+    questions: list[GeneratedQuestion]
 
 
 def generate_question_node(state: QuestionState):

@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from app.graphs.evaluation_graph import evaluation_graph
 from app.models import (
     QuestionGenerationRequest,
@@ -8,6 +8,7 @@ from app.models import (
 )
 
 from app.graphs.question_graph import question_graph
+from app.services.question_service import QuestionGenerationError
 
 app = FastAPI(
     title="InterviewOS AI Service",
@@ -31,14 +32,17 @@ def health_check():
 def generate_interview_questions(
     request: QuestionGenerationRequest
 ):
-    result = question_graph.invoke(
-        {
-            "target_role": request.targetRole,
-            "difficulty": request.difficulty,
-            "number_of_questions": request.numberOfQuestions,
-            "questions": []
-        }
-    )
+    try:
+        result = question_graph.invoke(
+            {
+                "target_role": request.targetRole,
+                "difficulty": request.difficulty,
+                "number_of_questions": request.numberOfQuestions,
+                "questions": []
+            }
+        )
+    except QuestionGenerationError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
     return QuestionGenerationResponse(
         questions=result["questions"]

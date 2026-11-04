@@ -31,6 +31,7 @@ import com.interviewos.backend.exception.InvalidLifecycleTransitionException;
 import com.interviewos.backend.exception.ResourceNotFoundException;
 import com.interviewos.backend.integration.ai.QuestionGenerationRequest;
 import com.interviewos.backend.integration.ai.QuestionGenerationResponse;
+import com.interviewos.backend.integration.ai.GeneratedQuestion;
 import com.interviewos.backend.service.InterviewService;
 
 @WebMvcTest({AiController.class, InterviewController.class})
@@ -44,7 +45,12 @@ class BackendApplicationTests {
     @Test
     void generatesQuestionsThroughTheBackendEndpoint() throws Exception {
         given(interviewService.generateQuestions(any(QuestionGenerationRequest.class)))
-            .willReturn(new QuestionGenerationResponse(List.of("What is a transaction?")));
+            .willReturn(new QuestionGenerationResponse(List.of(
+                new GeneratedQuestion(
+                    "What is a transaction?",
+                    List.of("Atomicity", "Consistency")
+                )
+            )));
 
         mockMvc.perform(post("/api/ai/questions")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -56,7 +62,9 @@ class BackendApplicationTests {
                     }
                     """))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.questions[0]").value("What is a transaction?"));
+            .andExpect(jsonPath("$.questions[0].questionText")
+                .value("What is a transaction?"))
+            .andExpect(jsonPath("$.questions[0].evaluationCriteria[0]").value("Atomicity"));
     }
 
     @Test

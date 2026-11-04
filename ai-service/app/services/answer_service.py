@@ -168,6 +168,7 @@ def _safe_fallback(error: Exception) -> AnswerEvaluationResponse:
     # The public status enum has no "unverified" value, so omit assessments
     # rather than presenting evaluation failure as candidate omissions.
     return AnswerEvaluationResponse(
+        evaluationStatus="FAILED",
         technicalAccuracy=0,
         completeness=0,
         clarity=0,
@@ -181,7 +182,8 @@ def _safe_fallback(error: Exception) -> AnswerEvaluationResponse:
             "are unverified; do not interpret this result as an assessment of "
             "the candidate. Please retry the evaluation."
         ),
-        suggestedFollowUp=None
+        suggestedFollowUp=None,
+        suggestedFollowUpCriteria=[]
     )
 
 
@@ -208,6 +210,10 @@ For each supplied evaluation criterion, return exactly one assessment with:
 - rationale: a concise explanation of why the answer demonstrates, partially
   addresses, or does not meaningfully address the criterion
 
+Separately, return suggestedFollowUpCriteria: specific, non-empty criteria for
+evaluating the suggested follow-up question; return an empty list if no
+follow-up is given.
+
 Use these status definitions:
 - COVERED: the candidate demonstrates the concept with a sufficiently correct
   explanation.
@@ -219,8 +225,11 @@ Do not treat keyword mentions or verbatim phrases alone as proof of coverage.
 The rationale must explain the actual substance of the answer, not merely
 repeat the evidence quote. Do not return strengths, completeness, overall
 scores, missing concepts, or criteria that were not supplied. Provide
-actionable feedback and, if useful, a technical follow-up question. Judge only
-the supplied criteria.
+actionable feedback and, if useful, a technical follow-up question. Any
+suggested follow-up and its criteria must be directly related: each criterion
+must describe an assessable part of the suggested follow-up question. Do not
+provide criteria for the original question as follow-up criteria. Judge only
+the supplied evaluation criteria for the candidate's current answer.
 
 Target role: {target_role}
 Difficulty: {difficulty}
@@ -265,6 +274,7 @@ Return only the structured response matching the required schema.
     ]
 
     return AnswerEvaluationResponse(
+        evaluationStatus="COMPLETED",
         technicalAccuracy=evaluation.technicalAccuracy,
         completeness=completeness,
         clarity=evaluation.clarity,
@@ -274,5 +284,6 @@ Return only the structured response matching the required schema.
         strengths=_build_strengths(validated_assessments),
         missingConcepts=missing_concepts,
         feedback=_build_feedback(validated_assessments),
-        suggestedFollowUp=evaluation.suggestedFollowUp
+        suggestedFollowUp=evaluation.suggestedFollowUp,
+        suggestedFollowUpCriteria=evaluation.suggestedFollowUpCriteria
     )

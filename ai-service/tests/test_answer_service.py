@@ -39,6 +39,7 @@ def draft(
         "criterionAssessments": assessments,
         "feedback": "Model feedback is not used as a source of assessment facts.",
         "suggestedFollowUp": "How would you test this implementation?",
+        "suggestedFollowUpCriteria": ["Test coverage", "Failure cases"],
     }
     result.update(extra)
     return result
@@ -288,6 +289,7 @@ def test_malformed_or_failed_llm_returns_explicit_fallback(
     )
 
     assert result.overallScore == 0
+    assert result.evaluationStatus == "FAILED"
     assert result.technicalAccuracy == 0
     assert result.completeness == 0
     assert result.clarity == 0
@@ -321,6 +323,7 @@ def test_empty_assessments_with_high_dimension_scores_use_fallback(
     assert result.clarity == 0
     assert result.depth == 0
     assert result.overallScore == 0
+    assert result.evaluationStatus == "FAILED"
     assert result.criterionAssessments == []
     assert result.strengths == []
     assert result.missingConcepts == []
@@ -343,6 +346,23 @@ def test_draft_requires_rationale_for_each_assessment():
                     }
                 ],
                 "feedback": "Feedback",
+            }
+        )
+
+
+def test_follow_up_criteria_are_validated():
+    with pytest.raises(ValidationError):
+        AnswerEvaluationDraft.model_validate(
+            {
+                "technicalAccuracy": 8,
+                "clarity": 8,
+                "depth": 8,
+                "criterionAssessments": [
+                    assessment("Explain hashing", "COVERED", "hash function")
+                ],
+                "feedback": "Feedback",
+                "suggestedFollowUp": "How would you test it?",
+                "suggestedFollowUpCriteria": [" ", "Testing"],
             }
         )
 
@@ -376,6 +396,7 @@ def test_prompt_distinguishes_explanation_from_keyword_evidence(
     assert "PARTIALLY_COVERED: the candidate mentions or explains only part" in mock_llm.prompt
     assert "MISSING: the candidate does not meaningfully address" in mock_llm.prompt
     assert "Do not treat keyword mentions or verbatim phrases alone as proof" in mock_llm.prompt
+    assert "suggested follow-up and its criteria must be directly related" in mock_llm.prompt
 
 
 def test_empty_and_duplicate_criteria_are_rejected():
@@ -424,6 +445,7 @@ def test_fastapi_evaluation_route_keeps_existing_response_contract(
 
     assert result.completeness == 10
     assert result.model_dump().keys() == {
+        "evaluationStatus",
         "technicalAccuracy",
         "completeness",
         "clarity",
@@ -434,4 +456,5 @@ def test_fastapi_evaluation_route_keeps_existing_response_contract(
         "missingConcepts",
         "feedback",
         "suggestedFollowUp",
+        "suggestedFollowUpCriteria",
     }

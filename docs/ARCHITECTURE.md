@@ -31,18 +31,20 @@ Responsible for:
 - REST API endpoints
 - Persistent data management
 - Communication with the AI service
+- Lifecycle transitions, answer evaluation persistence, and deterministic
+  follow-up selection
 
 ### AI Service
 Responsible for:
 - Generating interview questions
 - Evaluating candidate responses
 - Maintaining AI workflow context
-- Recommending adaptive follow-up questions
+- Suggesting follow-up questions and their evaluation criteria
 
 ### Database
 PostgreSQL will store:
 - Interview sessions
-- Questions and candidate responses
+- Questions, relational evaluation criteria, and candidate responses
 - Evaluation results
 - Interview reports
 
@@ -55,11 +57,15 @@ PostgreSQL will store:
 5. AI service generates the initial interview question.
 6. Backend persists the relevant session data.
 7. Frontend displays the question.
-8. Candidate submits an answer.
-9. AI service evaluates the answer and recommends the next action.
-10. Backend validates and persists the result.
-11. The process repeats until the interview is completed.
-12. Backend generates and stores the final evaluation report.
+8. Candidate submits an answer for the current question.
+9. Backend persists the answer as `PENDING`, then calls the AI service outside
+   a database transaction.
+10. Backend persists the evaluation as `COMPLETED` or records `FAILED` while
+    retaining the candidate answer.
+11. Backend applies its score/criterion/remaining-slot policy. A selected
+    follow-up replaces the next scheduled question; Python never changes
+    lifecycle state or question order.
+12. The process repeats until the interview is completed.
 
 ## 5. Architectural Principles
 
@@ -68,6 +74,7 @@ PostgreSQL will store:
 - Clear API contracts between services
 - Backend-controlled interview state transitions
 - Modular and maintainable design
+- Durable answer capture before external evaluation
 
 ## 6. Future Enhancements
 

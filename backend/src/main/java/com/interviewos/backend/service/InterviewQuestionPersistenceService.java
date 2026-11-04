@@ -11,6 +11,7 @@ import com.interviewos.backend.dto.InterviewQuestionResponse;
 import com.interviewos.backend.entity.Interview;
 import com.interviewos.backend.entity.InterviewQuestion;
 import com.interviewos.backend.exception.ResourceNotFoundException;
+import com.interviewos.backend.integration.ai.GeneratedQuestion;
 import com.interviewos.backend.repository.InterviewQuestionRepository;
 import com.interviewos.backend.repository.InterviewRepository;
 
@@ -30,7 +31,7 @@ public class InterviewQuestionPersistenceService {
     @Transactional
     public List<InterviewQuestionResponse> persistGeneratedQuestions(
         UUID interviewId,
-        List<String> questionTexts
+        List<GeneratedQuestion> generatedQuestions
     ) {
         Interview interview = interviewRepository.findByIdForUpdate(interviewId)
             .orElseThrow(() -> new ResourceNotFoundException(
@@ -45,9 +46,25 @@ public class InterviewQuestionPersistenceService {
                 .toList();
         }
 
-        List<InterviewQuestion> questions = new ArrayList<>(questionTexts.size());
-        for (int index = 0; index < questionTexts.size(); index++) {
-            questions.add(new InterviewQuestion(questionTexts.get(index), index + 1, interview));
+        List<InterviewQuestion> questions = new ArrayList<>(generatedQuestions.size());
+        for (int index = 0; index < generatedQuestions.size(); index++) {
+            GeneratedQuestion generated = generatedQuestions.get(index);
+            if (generated.questionText() == null || generated.questionText().isBlank()
+                || generated.evaluationCriteria() == null
+                || generated.evaluationCriteria().isEmpty()
+                || generated.evaluationCriteria().stream().anyMatch(
+                    criterion -> criterion == null || criterion.isBlank()
+                )) {
+                throw new IllegalArgumentException(
+                    "Generated questions must include text and evaluation criteria"
+                );
+            }
+            questions.add(new InterviewQuestion(
+                generated.questionText(),
+                index + 1,
+                interview,
+                generated.evaluationCriteria()
+            ));
         }
 
         return questionRepository.saveAll(questions).stream()

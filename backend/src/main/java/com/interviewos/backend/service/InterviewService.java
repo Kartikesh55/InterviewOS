@@ -1,8 +1,10 @@
 package com.interviewos.backend.service;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,8 +18,10 @@ import com.interviewos.backend.entity.InterviewStatus;
 import com.interviewos.backend.exception.InvalidLifecycleTransitionException;
 import com.interviewos.backend.exception.ResourceNotFoundException;
 import com.interviewos.backend.integration.ai.AiServiceClient;
+import com.interviewos.backend.integration.ai.AiServiceException;
 import com.interviewos.backend.integration.ai.AnswerEvaluationRequest;
 import com.interviewos.backend.integration.ai.AnswerEvaluationResponse;
+import com.interviewos.backend.integration.ai.GeneratedQuestion;
 import com.interviewos.backend.integration.ai.QuestionGenerationRequest;
 import com.interviewos.backend.integration.ai.QuestionGenerationResponse;
 import com.interviewos.backend.repository.InterviewQuestionRepository;
@@ -96,6 +100,7 @@ public class InterviewService
                 interview.getNumberOfQuestions()
             )
         );
+        validateGeneratedQuestions(generated, interview.getNumberOfQuestions());
 
         return questionPersistenceService.persistGeneratedQuestions(
             interviewId,
@@ -221,5 +226,37 @@ public class InterviewService
         } catch (IllegalStateException exception) {
             throw new InvalidLifecycleTransitionException(exception.getMessage());
         }
+    }
+
+    private void validateGeneratedQuestions(
+        QuestionGenerationResponse generated,
+        int maximumQuestionCount
+    ) {
+        if (generated == null
+            || generated.questions() == null
+            || generated.questions().size() != maximumQuestionCount
+            || generated.questions().stream().anyMatch(this::hasInvalidQuestion)) {
+            throw new AiServiceException(
+                HttpStatus.BAD_GATEWAY,
+                "AI service returned invalid questions or evaluation criteria",
+                null
+            );
+        }
+    }
+
+    private boolean hasInvalidQuestion(GeneratedQuestion question) {
+        return question == null
+            || question.questionText() == null
+            || question.questionText().isBlank()
+            || question.evaluationCriteria() == null
+            || question.evaluationCriteria().isEmpty()
+            || question.evaluationCriteria().stream().anyMatch(
+                criterion -> criterion == null || criterion.isBlank()
+            )
+            || question.evaluationCriteria().stream()
+                .map(criterion -> criterion.trim().replaceAll("\\s+", " ")
+                    .toLowerCase(Locale.ROOT))
+                .distinct()
+                .count() != question.evaluationCriteria().size();
     }
 }

@@ -25,10 +25,12 @@ import com.interviewos.backend.entity.Difficulty;
 import com.interviewos.backend.entity.Interview;
 import com.interviewos.backend.entity.InterviewAnswer;
 import com.interviewos.backend.entity.InterviewQuestion;
+import com.interviewos.backend.entity.EvaluationStatus;
 import com.interviewos.backend.entity.InterviewStatus;
 import com.interviewos.backend.exception.InvalidLifecycleTransitionException;
 import com.interviewos.backend.exception.ResourceNotFoundException;
 import com.interviewos.backend.integration.ai.AiServiceClient;
+import com.interviewos.backend.integration.ai.GeneratedQuestion;
 import com.interviewos.backend.integration.ai.QuestionGenerationRequest;
 import com.interviewos.backend.integration.ai.QuestionGenerationResponse;
 import com.interviewos.backend.repository.InterviewAnswerRepository;
@@ -70,12 +72,25 @@ class InterviewPersistenceTest {
             new InterviewQuestionPersistenceService(interviewRepository, questionRepository)
                 .persistGeneratedQuestions(
                     interviewId,
-                    List.of("Explain transactions.", "What is an index?")
+                    List.of(
+                        new GeneratedQuestion(
+                            "Explain transactions.",
+                            List.of("Atomicity", "Isolation")
+                        ),
+                        new GeneratedQuestion(
+                            "What is an index?",
+                            List.of("Lookup performance", "Write trade-offs")
+                        )
+                    )
                 );
 
         assertEquals(2, persisted.size());
         assertEquals("Explain transactions.", persisted.get(0).questionText());
         assertEquals(1, persisted.get(0).questionOrder());
+        assertEquals(
+            List.of("Atomicity", "Isolation"),
+            persisted.get(0).evaluationCriteria()
+        );
         assertEquals("What is an index?", persisted.get(1).questionText());
         assertEquals(2, persisted.get(1).questionOrder());
 
@@ -84,6 +99,10 @@ class InterviewPersistenceTest {
         verify(questionRepository).saveAll(captor.capture());
         assertSame(interview, captor.getValue().get(0).getInterview());
         assertSame(interview, captor.getValue().get(1).getInterview());
+        assertEquals(
+            List.of("Atomicity", "Isolation"),
+            captor.getValue().get(0).getEvaluationCriteria()
+        );
     }
 
     @Test
@@ -99,7 +118,10 @@ class InterviewPersistenceTest {
 
         List<InterviewQuestionResponse> result =
             new InterviewQuestionPersistenceService(interviewRepository, questionRepository)
-                .persistGeneratedQuestions(interviewId, List.of("New question?"));
+                .persistGeneratedQuestions(
+                    interviewId,
+                    List.of(new GeneratedQuestion("New question?", List.of("Specific criterion")))
+                );
 
         assertEquals(1, result.size());
         assertEquals("Existing question?", result.getFirst().questionText());
@@ -116,7 +138,10 @@ class InterviewPersistenceTest {
             () -> new InterviewQuestionPersistenceService(
                 interviewRepository,
                 questionRepository
-            ).persistGeneratedQuestions(interviewId, List.of("Question"))
+            ).persistGeneratedQuestions(
+                interviewId,
+                List.of(new GeneratedQuestion("Question", List.of("Criterion")))
+            )
         );
     }
 
@@ -125,23 +150,30 @@ class InterviewPersistenceTest {
         UUID interviewId = UUID.randomUUID();
         UUID questionId = UUID.randomUUID();
         Interview interview = new Interview("Backend Engineer", Difficulty.INTERMEDIATE, 1);
-        InterviewQuestion question = new InterviewQuestion("Explain transactions.", 1, interview);
+        InterviewQuestion question = new InterviewQuestion(
+            "Explain transactions.",
+            1,
+            interview,
+            List.of("Atomicity", "Isolation")
+        );
         ReflectionTestUtils.setField(question, "id", questionId);
 
-        when(interviewRepository.existsById(interviewId)).thenReturn(true);
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(interviewInProgressAt(1)));
         when(questionRepository.findByIdAndInterview_Id(questionId, interviewId))
             .thenReturn(Optional.of(question));
         when(answerRepository.save(org.mockito.ArgumentMatchers.any(InterviewAnswer.class)))
             .thenAnswer(invocation -> invocation.getArgument(0));
 
-        var response = new InterviewAnswerService(
+        PendingAnswerSubmission pending = new InterviewAnswerPersistenceService(
             interviewRepository,
             questionRepository,
             answerRepository
-        ).submitAnswer(interviewId, questionId, "A transaction groups operations.");
+        ).persistPendingAnswer(interviewId, questionId, "A transaction groups operations.");
 
-        assertEquals("A transaction groups operations.", response.candidateAnswer());
-        assertEquals(questionId, response.questionId());
+        assertEquals("A transaction groups operations.", pending.candidateAnswer());
+        assertEquals("Explain transactions.", pending.questionText());
+        assertEquals(List.of("Atomicity", "Isolation"), pending.evaluationCriteria());
         org.mockito.ArgumentCaptor<InterviewAnswer> answerCaptor =
             org.mockito.ArgumentCaptor.forClass(InterviewAnswer.class);
         verify(answerRepository).save(answerCaptor.capture());
@@ -153,24 +185,53 @@ class InterviewPersistenceTest {
     void rejectsAnswersForUnknownInterviewOrQuestion() {
         UUID interviewId = UUID.randomUUID();
         UUID questionId = UUID.randomUUID();
-        InterviewAnswerService service = new InterviewAnswerService(
+        InterviewAnswerPersistenceService service = new InterviewAnswerPersistenceService(
             interviewRepository,
             questionRepository,
             answerRepository
         );
-        when(interviewRepository.existsById(interviewId)).thenReturn(false);
+        when(interviewRepository.findByIdForUpdate(interviewId)).thenReturn(Optional.empty());
 
         assertThrows(
             ResourceNotFoundException.class,
-            () -> service.submitAnswer(interviewId, questionId, "Answer")
+            () -> service.persistPendingAnswer(interviewId, questionId, "Answer")
         );
 
-        when(interviewRepository.existsById(interviewId)).thenReturn(true);
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(interviewInProgressAt(1)));
         when(questionRepository.findByIdAndInterview_Id(questionId, interviewId))
             .thenReturn(Optional.empty());
         assertThrows(
             ResourceNotFoundException.class,
-            () -> service.submitAnswer(interviewId, questionId, "Answer")
+            () -> service.persistPendingAnswer(interviewId, questionId, "Answer")
+        );
+    }
+
+    @Test
+    void marksPersistedAnswerFailedWithoutRemovingCandidateText() {
+        UUID answerId = UUID.randomUUID();
+        InterviewAnswer answer = new InterviewAnswer(
+            "Persist this answer even if evaluation fails.",
+            new InterviewQuestion(
+                "Question?",
+                1,
+                new Interview("Backend Engineer", Difficulty.INTERMEDIATE, 1),
+                List.of("Criterion")
+            )
+        );
+        ReflectionTestUtils.setField(answer, "id", answerId);
+        when(answerRepository.findByIdForUpdate(answerId)).thenReturn(Optional.of(answer));
+
+        var response = new InterviewAnswerPersistenceService(
+            interviewRepository,
+            questionRepository,
+            answerRepository
+        ).markFailed(answerId);
+
+        assertEquals(EvaluationStatus.FAILED, response.evaluationStatus());
+        assertEquals(
+            "Persist this answer even if evaluation fails.",
+            response.candidateAnswer()
         );
     }
 
@@ -207,13 +268,15 @@ class InterviewPersistenceTest {
             .thenReturn(List.of());
         when(aiServiceClient.generateQuestions(
             org.mockito.ArgumentMatchers.any(QuestionGenerationRequest.class)
-        )).thenReturn(new QuestionGenerationResponse(List.of("Generated question?")));
+        )).thenReturn(new QuestionGenerationResponse(List.of(
+            new GeneratedQuestion("Generated question?", List.of("Correctness"))
+        )));
         List<InterviewQuestionResponse> persisted = List.of(
             new InterviewQuestionResponse(UUID.randomUUID(), "Generated question?", 1)
         );
         when(questionPersistenceService.persistGeneratedQuestions(
             interviewId,
-            List.of("Generated question?")
+            List.of(new GeneratedQuestion("Generated question?", List.of("Correctness")))
         )).thenReturn(persisted);
 
         InterviewService service = new InterviewService(
@@ -231,7 +294,7 @@ class InterviewPersistenceTest {
         );
         verify(questionPersistenceService).persistGeneratedQuestions(
             interviewId,
-            List.of("Generated question?")
+            List.of(new GeneratedQuestion("Generated question?", List.of("Correctness")))
         );
     }
 
@@ -240,7 +303,9 @@ class InterviewPersistenceTest {
         QuestionGenerationRequest request =
             new QuestionGenerationRequest("Backend Engineer", "INTERMEDIATE", 1);
         QuestionGenerationResponse response =
-            new QuestionGenerationResponse(List.of("Generated question?"));
+            new QuestionGenerationResponse(List.of(
+                new GeneratedQuestion("Generated question?", List.of("Correctness"))
+            ));
         when(aiServiceClient.generateQuestions(request)).thenReturn(response);
 
         InterviewService service = new InterviewService(
@@ -442,6 +507,14 @@ class InterviewPersistenceTest {
     private Interview inProgressInterview() {
         Interview interview = new Interview("Backend Engineer", Difficulty.INTERMEDIATE, 2);
         interview.start();
+        return interview;
+    }
+
+    private Interview interviewInProgressAt(int questionOrder) {
+        Interview interview = inProgressInterview();
+        while (interview.getCurrentQuestionOrder() < questionOrder) {
+            interview.advanceQuestion(questionOrder);
+        }
         return interview;
     }
 }

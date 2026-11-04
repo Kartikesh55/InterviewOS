@@ -46,7 +46,18 @@ class AiServiceClientTest {
                 }
                 """, true))
             .andRespond(withSuccess("""
-                {"questions":["What is a transaction?","Explain indexing."]}
+                {
+                  "questions": [
+                    {
+                      "questionText": "What is a transaction?",
+                      "evaluationCriteria": ["Atomicity", "Consistency"]
+                    },
+                    {
+                      "questionText": "Explain indexing.",
+                      "evaluationCriteria": ["Index lookup", "Write trade-offs"]
+                    }
+                  ]
+                }
                 """, APPLICATION_JSON));
 
         QuestionGenerationResponse response = client.generateQuestions(
@@ -55,7 +66,11 @@ class AiServiceClientTest {
 
         assertEquals(
             List.of("What is a transaction?", "Explain indexing."),
-            response.questions()
+            response.questions().stream().map(GeneratedQuestion::questionText).toList()
+        );
+        assertEquals(
+            List.of("Atomicity", "Consistency"),
+            response.questions().getFirst().evaluationCriteria()
         );
         server.verify();
     }
@@ -75,6 +90,7 @@ class AiServiceClientTest {
                 """, true))
             .andRespond(withSuccess("""
                 {
+                  "evaluationStatus": "COMPLETED",
                   "technicalAccuracy": 8.0,
                   "completeness": 7.5,
                   "clarity": 8.0,
@@ -90,7 +106,8 @@ class AiServiceClientTest {
                   "strengths": ["Index lookup"],
                   "missingConcepts": [],
                   "feedback": "Good explanation.",
-                  "suggestedFollowUp": null
+                  "suggestedFollowUp": null,
+                  "suggestedFollowUpCriteria": []
                 }
                 """, APPLICATION_JSON));
 

@@ -9,6 +9,13 @@ InterviewOS combines a Java Spring Boot backend with a Python-based AI orchestra
 
 Candidates can configure interviews, answer dynamically generated questions, receive adaptive follow-ups, and review detailed performance reports.
 
+Generated interview questions include persisted evaluation criteria. Answers are
+saved before the backend requests an evaluation; evaluation results are stored
+with a `PENDING`, `COMPLETED`, or `FAILED` status. The backend decides whether
+to replace the next scheduled question with an AI-suggested follow-up. Follow-ups
+reuse the next question slot and never increase the interview's configured
+question limit.
+
 ## Technology Stack
 
 - Java 24
