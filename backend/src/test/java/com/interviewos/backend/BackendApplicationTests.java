@@ -7,6 +7,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
+import java.time.LocalDateTime;
+import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,11 +18,17 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 
 import com.interviewos.backend.controller.AiController;
+import com.interviewos.backend.controller.InterviewController;
+import com.interviewos.backend.dto.InterviewAnswerResponse;
+import com.interviewos.backend.dto.InterviewQuestionResponse;
+import com.interviewos.backend.dto.InterviewResponse;
+import com.interviewos.backend.entity.Difficulty;
+import com.interviewos.backend.entity.InterviewStatus;
 import com.interviewos.backend.integration.ai.QuestionGenerationRequest;
 import com.interviewos.backend.integration.ai.QuestionGenerationResponse;
 import com.interviewos.backend.service.InterviewService;
 
-@WebMvcTest(AiController.class)
+@WebMvcTest({AiController.class, InterviewController.class})
 class BackendApplicationTests {
     @Autowired
     private MockMvc mockMvc;
@@ -44,5 +52,86 @@ class BackendApplicationTests {
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.questions[0]").value("What is a transaction?"));
+    }
+
+    @Test
+    void createsInterviewWithTheExistingResponseFields() throws Exception {
+        UUID interviewId = UUID.randomUUID();
+        given(interviewService.createInterview(
+            "Backend Engineer",
+            Difficulty.INTERMEDIATE,
+            2
+        )).willReturn(new InterviewResponse(
+            interviewId,
+            "Backend Engineer",
+            Difficulty.INTERMEDIATE,
+            2,
+            InterviewStatus.CREATED,
+            LocalDateTime.parse("2026-11-04T10:00:00")
+        ));
+
+        mockMvc.perform(post("/api/interviews")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "targetRole": "Backend Engineer",
+                      "difficulty": "INTERMEDIATE",
+                      "numberOfQuestions": 2
+                    }
+                    """))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.id").value(interviewId.toString()))
+            .andExpect(jsonPath("$.targetRole").value("Backend Engineer"))
+            .andExpect(jsonPath("$.difficulty").value("INTERMEDIATE"))
+            .andExpect(jsonPath("$.numberOfQuestions").value(2))
+            .andExpect(jsonPath("$.status").value("CREATED"));
+    }
+
+    @Test
+    void generatesAndReturnsQuestionsForAnInterview() throws Exception {
+        UUID interviewId = UUID.randomUUID();
+        given(interviewService.generateQuestionsForInterview(interviewId))
+            .willReturn(List.of(
+                new InterviewQuestionResponse(
+                    UUID.randomUUID(),
+                    "Explain transactions.",
+                    1
+                )
+            ));
+
+        mockMvc.perform(post("/api/interviews/{interviewId}/questions", interviewId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].questionText").value("Explain transactions."))
+            .andExpect(jsonPath("$[0].questionOrder").value(1));
+    }
+
+    @Test
+    void submitsCandidateAnswerForInterviewQuestion() throws Exception {
+        UUID interviewId = UUID.randomUUID();
+        UUID questionId = UUID.randomUUID();
+        given(interviewService.submitAnswer(
+            interviewId,
+            questionId,
+            "A transaction groups operations."
+        )).willReturn(new InterviewAnswerResponse(
+            UUID.randomUUID(),
+            questionId,
+            "A transaction groups operations.",
+            LocalDateTime.parse("2026-11-04T10:01:00")
+        ));
+
+        mockMvc.perform(post(
+                "/api/interviews/{interviewId}/questions/{questionId}/answers",
+                interviewId,
+                questionId
+            )
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"candidateAnswer":"A transaction groups operations."}
+                    """))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.questionId").value(questionId.toString()))
+            .andExpect(jsonPath("$.candidateAnswer")
+                .value("A transaction groups operations."));
     }
 }

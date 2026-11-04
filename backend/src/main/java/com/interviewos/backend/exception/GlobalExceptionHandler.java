@@ -43,6 +43,18 @@ public class GlobalExceptionHandler
         return ResponseEntity.status(exception.getStatus()).body(response);
     }
 
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<ValidationErrorResponse> handleNotFound(
+        ResourceNotFoundException exception)
+    {
+        ValidationErrorResponse response = new ValidationErrorResponse(
+            exception.getMessage(),
+            List.of()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+    }
+
     public record ValidationErrorResponse(
         String message,
         List<String> errors

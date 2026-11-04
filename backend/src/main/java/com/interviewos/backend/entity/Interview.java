@@ -10,6 +10,10 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.EnumType;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.CascadeType;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 public class Interview
@@ -34,6 +38,9 @@ public class Interview
 
     @Column(nullable = false)
     private LocalDateTime createdAt;
+
+    @OneToMany(mappedBy = "interview", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<InterviewQuestion> questions = new ArrayList<>();
 
     public Interview()
     {
@@ -76,5 +83,10 @@ public class Interview
     public LocalDateTime getCreatedAt()
     {
         return createdAt;
+    }
+
+    public List<InterviewQuestion> getQuestions()
+    {
+        return questions;
     }
 }
