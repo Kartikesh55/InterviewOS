@@ -8,6 +8,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import com.interviewos.backend.integration.ai.AiServiceException;
+
 @RestControllerAdvice
 public class GlobalExceptionHandler
 {
@@ -27,6 +29,18 @@ public class GlobalExceptionHandler
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+    }
+
+    @ExceptionHandler(AiServiceException.class)
+    public ResponseEntity<ValidationErrorResponse> handleAiServiceErrors(
+        AiServiceException exception)
+    {
+        ValidationErrorResponse response = new ValidationErrorResponse(
+            exception.getMessage(),
+            List.of()
+        );
+
+        return ResponseEntity.status(exception.getStatus()).body(response);
     }
 
     public record ValidationErrorResponse(
