@@ -2,6 +2,8 @@ package com.interviewos.backend;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.doThrow;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -20,10 +22,13 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import com.interviewos.backend.controller.AiController;
 import com.interviewos.backend.controller.InterviewController;
 import com.interviewos.backend.dto.InterviewAnswerResponse;
+import com.interviewos.backend.dto.InterviewDetailsResponse;
 import com.interviewos.backend.dto.InterviewQuestionResponse;
 import com.interviewos.backend.dto.InterviewResponse;
 import com.interviewos.backend.entity.Difficulty;
 import com.interviewos.backend.entity.InterviewStatus;
+import com.interviewos.backend.exception.InvalidLifecycleTransitionException;
+import com.interviewos.backend.exception.ResourceNotFoundException;
 import com.interviewos.backend.integration.ai.QuestionGenerationRequest;
 import com.interviewos.backend.integration.ai.QuestionGenerationResponse;
 import com.interviewos.backend.service.InterviewService;
@@ -133,5 +138,105 @@ class BackendApplicationTests {
             .andExpect(jsonPath("$.questionId").value(questionId.toString()))
             .andExpect(jsonPath("$.candidateAnswer")
                 .value("A transaction groups operations."));
+    }
+
+    @Test
+    void startsInterview() throws Exception {
+        UUID interviewId = UUID.randomUUID();
+        given(interviewService.startInterview(interviewId))
+            .willReturn(new InterviewResponse(
+                interviewId,
+                "Backend Engineer",
+                Difficulty.INTERMEDIATE,
+                2,
+                InterviewStatus.IN_PROGRESS,
+                LocalDateTime.parse("2026-11-04T10:00:00")
+            ));
+
+        mockMvc.perform(post("/api/interviews/{interviewId}/start", interviewId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("IN_PROGRESS"));
+    }
+
+    @Test
+    void retrievesInterviewDetailsAndCurrentQuestion() throws Exception {
+        UUID interviewId = UUID.randomUUID();
+        given(interviewService.getInterviewDetails(interviewId))
+            .willReturn(new InterviewDetailsResponse(
+                interviewId,
+                "Backend Engineer",
+                Difficulty.INTERMEDIATE,
+                1,
+                InterviewStatus.IN_PROGRESS,
+                LocalDateTime.parse("2026-11-04T10:00:00"),
+                1,
+                List.of(new InterviewQuestionResponse(
+                    UUID.randomUUID(),
+                    "Explain transactions.",
+                    1
+                ))
+            ));
+        given(interviewService.getCurrentQuestion(interviewId))
+            .willReturn(new InterviewQuestionResponse(
+                UUID.randomUUID(),
+                "Explain transactions.",
+                1
+            ));
+
+        mockMvc.perform(get("/api/interviews/{interviewId}", interviewId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.currentQuestionOrder").value(1))
+            .andExpect(jsonPath("$.questions[0].questionText")
+                .value("Explain transactions."));
+        mockMvc.perform(get(
+                "/api/interviews/{interviewId}/current-question",
+                interviewId
+            ))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.questionOrder").value(1));
+    }
+
+    @Test
+    void advancesAndCompletesInterview() throws Exception {
+        UUID interviewId = UUID.randomUUID();
+        given(interviewService.advanceToNextQuestion(interviewId))
+            .willReturn(new InterviewQuestionResponse(
+                UUID.randomUUID(),
+                "Second question?",
+                2
+            ));
+        given(interviewService.completeInterview(interviewId))
+            .willReturn(new InterviewResponse(
+                interviewId,
+                "Backend Engineer",
+                Difficulty.INTERMEDIATE,
+                2,
+                InterviewStatus.COMPLETED,
+                LocalDateTime.parse("2026-11-04T10:00:00")
+            ));
+
+        mockMvc.perform(post("/api/interviews/{interviewId}/next-question", interviewId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.questionOrder").value(2));
+        mockMvc.perform(post("/api/interviews/{interviewId}/complete", interviewId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("COMPLETED"));
+    }
+
+    @Test
+    void returnsConflictForInvalidLifecycleTransitionsAndNotFoundForMissingInterview()
+        throws Exception {
+        UUID interviewId = UUID.randomUUID();
+        doThrow(new InvalidLifecycleTransitionException("Invalid transition"))
+            .when(interviewService).startInterview(interviewId);
+        doThrow(new ResourceNotFoundException("Interview not found"))
+            .when(interviewService).completeInterview(interviewId);
+
+        mockMvc.perform(post("/api/interviews/{interviewId}/start", interviewId))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value("Invalid transition"));
+        mockMvc.perform(post("/api/interviews/{interviewId}/complete", interviewId))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.message").value("Interview not found"));
     }
 }

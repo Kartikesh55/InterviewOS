@@ -55,6 +55,18 @@ public class GlobalExceptionHandler
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
     }
 
+    @ExceptionHandler(InvalidLifecycleTransitionException.class)
+    public ResponseEntity<ValidationErrorResponse> handleInvalidLifecycleTransition(
+        InvalidLifecycleTransitionException exception)
+    {
+        ValidationErrorResponse response = new ValidationErrorResponse(
+            exception.getMessage(),
+            List.of()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
+    }
+
     public record ValidationErrorResponse(
         String message,
         List<String> errors

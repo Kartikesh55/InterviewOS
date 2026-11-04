@@ -20,10 +20,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.interviewos.backend.dto.InterviewQuestionResponse;
+import com.interviewos.backend.dto.InterviewResponse;
 import com.interviewos.backend.entity.Difficulty;
 import com.interviewos.backend.entity.Interview;
 import com.interviewos.backend.entity.InterviewAnswer;
 import com.interviewos.backend.entity.InterviewQuestion;
+import com.interviewos.backend.entity.InterviewStatus;
+import com.interviewos.backend.exception.InvalidLifecycleTransitionException;
 import com.interviewos.backend.exception.ResourceNotFoundException;
 import com.interviewos.backend.integration.ai.AiServiceClient;
 import com.interviewos.backend.integration.ai.QuestionGenerationRequest;
@@ -249,5 +252,196 @@ class InterviewPersistenceTest {
         );
 
         assertEquals(response, service.generateQuestions(request));
+    }
+
+    @Test
+    void startsCreatedInterviewAtItsFirstPersistedQuestion() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = new Interview("Backend Engineer", Difficulty.INTERMEDIATE, 2);
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(interview));
+        when(questionRepository.findByInterview_IdOrderByQuestionOrderAsc(interviewId))
+            .thenReturn(List.of(
+                new InterviewQuestion("First?", 1, interview),
+                new InterviewQuestion("Second?", 2, interview)
+            ));
+
+        InterviewResponse response = lifecycleService().startInterview(interviewId);
+
+        assertEquals(InterviewStatus.IN_PROGRESS, response.status());
+        assertEquals(1, interview.getCurrentQuestionOrder());
+    }
+
+    @Test
+    void doesNotStartInterviewWithoutPersistedQuestions() {
+        UUID interviewId = UUID.randomUUID();
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(new Interview(
+                "Backend Engineer",
+                Difficulty.INTERMEDIATE,
+                2
+            )));
+        when(questionRepository.findByInterview_IdOrderByQuestionOrderAsc(interviewId))
+            .thenReturn(List.of());
+
+        assertThrows(
+            InvalidLifecycleTransitionException.class,
+            () -> lifecycleService().startInterview(interviewId)
+        );
+    }
+
+    @Test
+    void rejectsStartingInterviewOutsideCreatedState() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = inProgressInterview();
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(interview));
+
+        assertThrows(
+            InvalidLifecycleTransitionException.class,
+            () -> lifecycleService().startInterview(interviewId)
+        );
+    }
+
+    @Test
+    void retrievesDetailsWithPersistedQuestionsAndCurrentProgress() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = inProgressInterview();
+        List<InterviewQuestion> questions = List.of(
+            new InterviewQuestion("First?", 1, interview),
+            new InterviewQuestion("Second?", 2, interview)
+        );
+        when(interviewRepository.findById(interviewId)).thenReturn(Optional.of(interview));
+        when(questionRepository.findByInterview_IdOrderByQuestionOrderAsc(interviewId))
+            .thenReturn(questions);
+
+        var details = lifecycleService().getInterviewDetails(interviewId);
+
+        assertEquals(InterviewStatus.IN_PROGRESS, details.status());
+        assertEquals(1, details.currentQuestionOrder());
+        assertEquals(List.of("First?", "Second?"), details.questions().stream()
+            .map(InterviewQuestionResponse::questionText)
+            .toList());
+    }
+
+    @Test
+    void retrievesAndAdvancesCurrentQuestionInOrder() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = inProgressInterview();
+        when(interviewRepository.findById(interviewId)).thenReturn(Optional.of(interview));
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(interview));
+        when(questionRepository.findByInterview_IdOrderByQuestionOrderAsc(interviewId))
+            .thenReturn(List.of(
+                new InterviewQuestion("First?", 1, interview),
+                new InterviewQuestion("Second?", 2, interview)
+            ));
+        when(questionRepository.findByInterview_IdAndQuestionOrder(interviewId, 1))
+            .thenReturn(Optional.of(new InterviewQuestion("First?", 1, interview)));
+        when(questionRepository.findByInterview_IdAndQuestionOrder(interviewId, 2))
+            .thenReturn(Optional.of(new InterviewQuestion("Second?", 2, interview)));
+
+        assertEquals("First?", lifecycleService().getCurrentQuestion(interviewId).questionText());
+        assertEquals(
+            "Second?",
+            lifecycleService().advanceToNextQuestion(interviewId).questionText()
+        );
+        assertEquals(2, interview.getCurrentQuestionOrder());
+    }
+
+    @Test
+    void preventsAdvancingPastFinalQuestionWithoutChangingCurrentIndex() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = inProgressInterview();
+        interview.advanceQuestion(2);
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(interview));
+        when(questionRepository.findByInterview_IdOrderByQuestionOrderAsc(interviewId))
+            .thenReturn(List.of(
+                new InterviewQuestion("First?", 1, interview),
+                new InterviewQuestion("Second?", 2, interview)
+            ));
+
+        assertThrows(
+            InvalidLifecycleTransitionException.class,
+            () -> lifecycleService().advanceToNextQuestion(interviewId)
+        );
+        assertEquals(2, interview.getCurrentQuestionOrder());
+    }
+
+    @Test
+    void completesOnlyAnInProgressInterview() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = inProgressInterview();
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(interview));
+
+        InterviewResponse response = lifecycleService().completeInterview(interviewId);
+
+        assertEquals(InterviewStatus.COMPLETED, response.status());
+    }
+
+    @Test
+    void rejectsCompletionBeforeStartAndStartingCompletedInterview() {
+        UUID interviewId = UUID.randomUUID();
+        Interview created = new Interview("Backend Engineer", Difficulty.INTERMEDIATE, 1);
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(created));
+        assertThrows(
+            InvalidLifecycleTransitionException.class,
+            () -> lifecycleService().completeInterview(interviewId)
+        );
+
+        Interview completed = inProgressInterview();
+        completed.complete();
+        when(interviewRepository.findByIdForUpdate(interviewId))
+            .thenReturn(Optional.of(completed));
+        when(questionRepository.findByInterview_IdOrderByQuestionOrderAsc(interviewId))
+            .thenReturn(List.of(new InterviewQuestion("Question?", 1, completed)));
+        assertThrows(
+            InvalidLifecycleTransitionException.class,
+            () -> lifecycleService().startInterview(interviewId)
+        );
+    }
+
+    @Test
+    void lifecycleOperationsReturnNotFoundForUnknownInterviewOrQuestion() {
+        UUID interviewId = UUID.randomUUID();
+        when(interviewRepository.findByIdForUpdate(interviewId)).thenReturn(Optional.empty());
+        assertThrows(
+            ResourceNotFoundException.class,
+            () -> lifecycleService().startInterview(interviewId)
+        );
+
+        when(interviewRepository.findById(interviewId)).thenReturn(Optional.empty());
+        assertThrows(
+            ResourceNotFoundException.class,
+            () -> lifecycleService().getInterviewDetails(interviewId)
+        );
+
+        Interview interview = inProgressInterview();
+        when(interviewRepository.findById(interviewId)).thenReturn(Optional.of(interview));
+        when(questionRepository.findByInterview_IdAndQuestionOrder(interviewId, 1))
+            .thenReturn(Optional.empty());
+        assertThrows(
+            ResourceNotFoundException.class,
+            () -> lifecycleService().getCurrentQuestion(interviewId)
+        );
+    }
+
+    private InterviewService lifecycleService() {
+        return new InterviewService(
+            interviewRepository,
+            questionRepository,
+            aiServiceClient,
+            questionPersistenceService,
+            answerService
+        );
+    }
+
+    private Interview inProgressInterview() {
+        Interview interview = new Interview("Backend Engineer", Difficulty.INTERMEDIATE, 2);
+        interview.start();
+        return interview;
     }
 }

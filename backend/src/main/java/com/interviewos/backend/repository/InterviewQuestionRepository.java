@@ -12,4 +12,9 @@ public interface InterviewQuestionRepository extends JpaRepository<InterviewQues
     List<InterviewQuestion> findByInterview_IdOrderByQuestionOrderAsc(UUID interviewId);
 
     Optional<InterviewQuestion> findByIdAndInterview_Id(UUID questionId, UUID interviewId);
+
+    Optional<InterviewQuestion> findByInterview_IdAndQuestionOrder(
+        UUID interviewId,
+        Integer questionOrder
+    );
 }

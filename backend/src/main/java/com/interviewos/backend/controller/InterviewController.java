@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.PathVariable;
 
 import com.interviewos.backend.dto.InterviewAnswerResponse;
+import com.interviewos.backend.dto.InterviewDetailsResponse;
 import com.interviewos.backend.dto.InterviewQuestionResponse;
 import com.interviewos.backend.dto.InterviewResponse;
 import com.interviewos.backend.dto.SubmitAnswerRequest;
@@ -28,6 +30,19 @@ public class InterviewController
     public InterviewController(InterviewService interviewService)
     {
         this.interviewService = interviewService;
+    }
+
+    @GetMapping("/{interviewId}")
+    public InterviewDetailsResponse getInterviewDetails(
+        @PathVariable UUID interviewId
+    ) {
+        return interviewService.getInterviewDetails(interviewId);
+    }
+
+    @PostMapping("/{interviewId}/start")
+    public InterviewResponse startInterview(@PathVariable UUID interviewId)
+    {
+        return interviewService.startInterview(interviewId);
     }
 
     @PostMapping
@@ -47,6 +62,26 @@ public class InterviewController
     )
     {
         return interviewService.generateQuestionsForInterview(interviewId);
+    }
+
+    @GetMapping("/{interviewId}/current-question")
+    public InterviewQuestionResponse getCurrentQuestion(
+        @PathVariable UUID interviewId
+    ) {
+        return interviewService.getCurrentQuestion(interviewId);
+    }
+
+    @PostMapping("/{interviewId}/next-question")
+    public InterviewQuestionResponse advanceToNextQuestion(
+        @PathVariable UUID interviewId
+    ) {
+        return interviewService.advanceToNextQuestion(interviewId);
+    }
+
+    @PostMapping("/{interviewId}/complete")
+    public InterviewResponse completeInterview(@PathVariable UUID interviewId)
+    {
+        return interviewService.completeInterview(interviewId);
     }
 
     @PostMapping("/{interviewId}/questions/{questionId}/answers")

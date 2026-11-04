@@ -39,6 +39,9 @@ public class Interview
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
+    @Column
+    private Integer currentQuestionOrder;
+
     @OneToMany(mappedBy = "interview", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<InterviewQuestion> questions = new ArrayList<>();
 
@@ -88,5 +91,38 @@ public class Interview
     public List<InterviewQuestion> getQuestions()
     {
         return questions;
+    }
+
+    public Integer getCurrentQuestionOrder()
+    {
+        return currentQuestionOrder;
+    }
+
+    public void start()
+    {
+        if (status != InterviewStatus.CREATED) {
+            throw new IllegalStateException("Only CREATED interviews can be started");
+        }
+        status = InterviewStatus.IN_PROGRESS;
+        currentQuestionOrder = 1;
+    }
+
+    public void advanceQuestion(int questionCount)
+    {
+        if (status != InterviewStatus.IN_PROGRESS) {
+            throw new IllegalStateException("Only IN_PROGRESS interviews can advance");
+        }
+        if (currentQuestionOrder == null || currentQuestionOrder >= questionCount) {
+            throw new IllegalStateException("There is no next question");
+        }
+        currentQuestionOrder++;
+    }
+
+    public void complete()
+    {
+        if (status != InterviewStatus.IN_PROGRESS) {
+            throw new IllegalStateException("Only IN_PROGRESS interviews can be completed");
+        }
+        status = InterviewStatus.COMPLETED;
     }
 }
