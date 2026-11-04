@@ -1,86 +1,109 @@
+# InterviewOS Architecture
 
-# InterviewOS – System Architecture
+## Overview
 
-## 1. Project Overview
+InterviewOS is a modular Python monolith plus a separately deployed React
+frontend. One FastAPI process owns the public API, interview business rules,
+database transactions, and LangGraph orchestration. PostgreSQL is the source of
+truth. Ollama runs the local model process; the backend does not make an
+inter-service HTTP request for AI workflows.
 
-InterviewOS is an adaptive AI-powered technical interview platform.
-It simulates technical interviews, evaluates candidate responses,
-generates adaptive follow-up questions, and provides performance reports.
+## Modules
 
-## 2. Technology Stack
+```text
+backend/app/
+  api/routes/       FastAPI routers and request dependency wiring
+  core/             Settings and domain/API exceptions
+  db/               SQLAlchemy base and session factory
+  models/           SQLAlchemy entities and relationships
+  schemas/          Pydantic request/response and AI draft contracts
+  repositories/     ORM queries, row locks, and ordered result loading
+  services/         Lifecycle, persistence, evaluation, and adaptive policy
+  ai/
+    graphs/         LangGraph question and evaluation graphs
+    services/       LLM prompting, structured output validation, score logic
+    llm.py          Environment-configured Ollama model factory
+backend/alembic/    Versioned PostgreSQL schema migrations
+```
 
-- Frontend: React, TypeScript, Tailwind CSS
-- Backend: Java, Spring Boot
-- AI Service: Python, LangGraph
-- Database: PostgreSQL
-- Containerization: Docker
+API routers validate and delegate. Services own transaction boundaries and
+business decisions. AI graph nodes call the Python AI services directly.
 
-## 3. System Components
+## Request and evaluation flow
 
-### Frontend
-Responsible for:
-- Dashboard and interview configuration
-- Interview interaction interface
-- Displaying questions and collecting answers
-- Showing evaluation reports
+1. `POST /api/interviews` validates role, difficulty, and question count, then
+   creates a `CREATED` interview.
+2. `POST /api/interviews/{id}/questions` checks for existing questions in a
+   short locked transaction. If none exist, it commits that transaction,
+   invokes question-generation LangGraph, validates the structured output, then
+   opens a separate transaction to persist ordered questions and criteria.
+3. Starting an interview locks the interview row, verifies questions exist,
+   sets status to `IN_PROGRESS`, and sets current order to 1.
+4. Answer submission locks and validates the interview/current question,
+   persists a unique answer with `PENDING` status, and commits.
+5. LangGraph/Ollama evaluation executes with no database transaction open. The
+   request is built from the stored question, answer, role, difficulty, and
+   ordered criteria.
+6. On success, the backend validates quotes against the answer, recalculates
+   completeness and weighted overall score, derives consistent strengths,
+   missing concepts, and feedback, then persists evaluations.
+7. Java-era behavior is preserved in the Python service: any selected
+   follow-up replaces the next scheduled question row, reuses its order, and
+   persists its criteria/source. The backend checks the score/coverage rule and
+   remaining slot; the LLM cannot change interview state.
+8. On evaluation failure, a short transaction marks the already-persisted
+   answer `FAILED`; no scores or assessment facts are fabricated.
+9. `GET /api/interviews/{id}/report` aggregates persisted results with no LLM
+   call.
 
-### Backend
-Responsible for:
-- Interview session management
-- Business logic and validation
-- REST API endpoints
-- Persistent data management
-- Communication with the AI service
-- Lifecycle transitions, answer evaluation persistence, and deterministic
-  follow-up selection
+## Lifecycle invariants
 
-### AI Service
-Responsible for:
-- Generating interview questions
-- Evaluating candidate responses
-- Maintaining AI workflow context
-- Suggesting follow-up questions and their evaluation criteria
+- `CREATED -> IN_PROGRESS -> COMPLETED` is the only supported state path.
+- Starting requires at least one persisted question.
+- Current-question retrieval, advancing, completion, and answer submission
+  require `IN_PROGRESS`.
+- Row locks serialize lifecycle transitions and answer creation in PostgreSQL.
+- An answer must reference the current question belonging to that interview.
+- One answer is allowed per question.
+- Question order is unique per interview and never exceeds the configured
+  maximum. Follow-ups replace an existing next slot.
 
-### Database
-PostgreSQL will store:
-- Interview sessions
-- Questions, relational evaluation criteria, and candidate responses
-- Evaluation results
-- Interview reports
+## Persistence
 
-## 4. High-Level Request Flow
+SQLAlchemy models map the existing Hibernate tables to preserve live data.
+Ordered question criteria, answer strengths, missing concepts, and follow-up
+criteria remain relational child tables. Criterion assessments are child rows
+of an answer. UUID primary/foreign keys and existing uniqueness constraints
+remain in place.
 
-1. Candidate configures an interview through the frontend.
-2. Frontend sends a request to the Spring Boot backend.
-3. Backend validates the request and creates an interview session.
-4. Backend communicates with the Python AI service.
-5. AI service generates the initial interview question.
-6. Backend persists the relevant session data.
-7. Frontend displays the question.
-8. Candidate submits an answer for the current question.
-9. Backend persists the answer as `PENDING`, then calls the AI service outside
-   a database transaction.
-10. Backend persists the evaluation as `COMPLETED` or records `FAILED` while
-    retaining the candidate answer.
-11. Backend applies its score/criterion/remaining-slot policy. A selected
-    follow-up replaces the next scheduled question; Python never changes
-    lifecycle state or question order.
-12. The process repeats until the interview is completed.
+Alembic owns schema changes. The initial migration adopts a complete existing
+JPA schema, validates expected tables/columns, adds the missing assessment
+status constraint/indexes, and converts legacy naive timestamps to timezone
+aware values. It rejects a partial schema rather than dropping or overwriting
+data. Legacy timestamp conversion requires the original Java host timezone
+through `LEGACY_TIMESTAMP_TIMEZONE`; new timestamps are UTC.
 
-## 5. Architectural Principles
+## API
 
-- Separation of concerns
-- Single source of truth for persistent application state
-- Clear API contracts between services
-- Backend-controlled interview state transitions
-- Modular and maintainable design
-- Durable answer capture before external evaluation
+- `GET /api/health`
+- `POST /api/interviews`
+- `GET /api/interviews/{interviewId}`
+- `POST /api/interviews/{interviewId}/questions`
+- `POST /api/interviews/{interviewId}/start`
+- `GET /api/interviews/{interviewId}/current-question`
+- `POST /api/interviews/{interviewId}/next-question`
+- `POST /api/interviews/{interviewId}/questions/{questionId}/answers`
+- `POST /api/interviews/{interviewId}/complete`
+- `GET /api/interviews/{interviewId}/report`
 
-## 6. Future Enhancements
+Existing AI utility routes are retained for compatibility; the interview
+workflow itself invokes the graphs internally. Swagger UI is available at
+`/docs`.
 
-- Voice-based interviews
-- Secure code execution
-- Behavioral interview simulations
-- Advanced analytics
-- Authentication and authorization
-- Improved concurrency and recovery handling
+## Reliability and limitations
+
+AI failures leave durable answers marked `FAILED`. There is not yet a retry
+endpoint. Quote validation proves only that evidence is a normalized verbatim
+substring; whether it supports a concept remains LLM judgment. Follow-up
+criteria are checked for structure and nonemptiness, while their semantic
+relevance to the suggested question cannot be proven deterministically.

@@ -4,14 +4,6 @@
 .env.*
 !.env.example
 
-# Java / Spring Boot
-*.class
-*.jar
-*.war
-target/
-.gradle/
-build/
-
 # Python
 __pycache__/
 *.py[cod]
@@ -21,6 +13,8 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 
 # Node.js / React
 node_modules/
